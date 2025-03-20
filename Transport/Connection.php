@@ -286,6 +286,7 @@ class Connection
         $this->clearWhenDisconnected();
 
         if ($this->autoSetupExchange) {
+            $this->logDuration($this->setupExchangeAndQueues(...), 'setupExchangeAndQueues');
             $this->setupExchangeAndQueues(); // also setup normal exchange for delayed messages so delay queue can DLX messages to it
         }
 
@@ -342,15 +343,19 @@ class Connection
 
         $this->lastActivityTime = time();
 
-        $exchange->publish(
-            $body,
-            $routingKey,
-            $amqpStamp ? $amqpStamp->getFlags() : \AMQP_NOPARAM,
-            $attributes
-        );
+        $this->logDuration(function () use ($exchange, $body, $routingKey, $attributes, $amqpStamp) {
+            $exchange->publish(
+                $body,
+                $routingKey,
+                $amqpStamp ? $amqpStamp->getFlags() : \AMQP_NOPARAM,
+                $attributes
+            );
+        }, 'exchange->publish');
 
         if ('' !== ($this->connectionOptions['confirm_timeout'] ?? '')) {
-            $this->channel()->waitForConfirm((float) $this->connectionOptions['confirm_timeout']);
+            $this->logDuration(function () {
+                $this->channel()->waitForConfirm((float) $this->connectionOptions['confirm_timeout']);
+            }, 'waitForConfirm');
         }
     }
 
@@ -592,6 +597,21 @@ class Connection
             }
 
             throw $e;
+        }
+    }
+
+    private function logDuration(\Closure $fn, string $method): mixed
+    {
+        $startedAt = microtime(true);
+        try {
+            return $fn();
+        } finally {
+            $this->logger?->notice('AMQP Publish: setupExchangeAndQueues()', [
+                'app.debug.amqp.publish' => [
+                    'method' => $method,
+                    'duration' => microtime(true) - $startedAt,
+                ],
+            ]);
         }
     }
 }
