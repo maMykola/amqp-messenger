@@ -11,6 +11,8 @@
 
 namespace Symfony\Component\Messenger\Bridge\Amqp\Transport;
 
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerAwareTrait;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Messenger\Exception\InvalidArgumentException;
 use Symfony\Component\Messenger\Exception\LogicException;
@@ -23,8 +25,10 @@ use Symfony\Component\Messenger\Exception\TransportException;
  *
  * @final
  */
-class Connection
+class Connection implements LoggerAwareInterface
 {
+    use LoggerAwareTrait;
+
     private const ARGUMENTS_AS_INTEGER = [
         'x-delay',
         'x-expires',
@@ -100,7 +104,6 @@ class Connection
         private array $exchangeOptions,
         private array $queuesOptions,
         ?AmqpFactory $amqpFactory = null,
-        private ?LoggerInterface $logger = null,
     ) {
         if (!\extension_loaded('amqp')) {
             throw new LogicException(sprintf('You cannot use the "%s" as the "amqp" extension is not installed.', __CLASS__));
@@ -163,7 +166,7 @@ class Connection
      *     * verify: Enable or disable peer verification. If peer verification is enabled then the common name in the
      *       server certificate must match the server name. Peer verification is enabled by default.
      */
-    public static function fromDsn(#[\SensitiveParameter] string $dsn, array $options = [], ?AmqpFactory $amqpFactory = null, ?LoggerInterface $logger = null): self
+    public static function fromDsn(#[\SensitiveParameter] string $dsn, array $options = [], ?AmqpFactory $amqpFactory = null): self
     {
         if (false === $params = parse_url($dsn)) {
             // this is a valid URI that parse_url cannot handle when you want to pass all parameters as options
@@ -229,7 +232,7 @@ class Connection
             throw new InvalidArgumentException('No CA certificate has been provided. Set "amqp.cacert" in your php.ini or pass the "cacert" parameter in the DSN to use SSL. Alternatively, you can use amqp:// to use without SSL.');
         }
 
-        return new self($amqpOptions, $exchangeOptions, $queuesOptions, $amqpFactory, $logger);
+        return new self($amqpOptions, $exchangeOptions, $queuesOptions, $amqpFactory);
     }
 
     private static function validateOptions(array $options): void

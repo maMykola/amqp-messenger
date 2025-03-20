@@ -23,15 +23,11 @@ use Symfony\Component\Messenger\Transport\TransportInterface;
  */
 class AmqpTransportFactory implements TransportFactoryInterface
 {
-    public function __construct(protected LoggerInterface $logger)
-    {
-    }
-
     public function createTransport(#[\SensitiveParameter] string $dsn, array $options, SerializerInterface $serializer): TransportInterface
     {
         unset($options['transport_name']);
 
-        return new AmqpTransport(Connection::fromDsn($dsn, $options), $serializer, $this->logger);
+        return new AmqpTransport(Connection::fromDsn($dsn, $options), $serializer);
     }
 
     public function supports(#[\SensitiveParameter] string $dsn, array $options): bool
