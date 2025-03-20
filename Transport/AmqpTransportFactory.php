@@ -11,6 +11,8 @@
 
 namespace Symfony\Component\Messenger\Bridge\Amqp\Transport;
 
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerAwareTrait;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Messenger\Transport\Serialization\SerializerInterface;
 use Symfony\Component\Messenger\Transport\TransportFactoryInterface;
@@ -21,13 +23,18 @@ use Symfony\Component\Messenger\Transport\TransportInterface;
  *
  * @implements TransportFactoryInterface<AmqpTransport>
  */
-class AmqpTransportFactory implements TransportFactoryInterface
+class AmqpTransportFactory implements TransportFactoryInterface, LoggerAwareInterface
 {
+    use LoggerAwareTrait;
+
     public function createTransport(#[\SensitiveParameter] string $dsn, array $options, SerializerInterface $serializer): TransportInterface
     {
         unset($options['transport_name']);
 
-        return new AmqpTransport(Connection::fromDsn($dsn, $options), $serializer);
+        $connection = Connection::fromDsn($dsn, $options);
+        $connection->setLogger($this->logger);
+
+        return new AmqpTransport($connection, $serializer);
     }
 
     public function supports(#[\SensitiveParameter] string $dsn, array $options): bool
