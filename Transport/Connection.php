@@ -371,10 +371,13 @@ class Connection implements LoggerAwareInterface
 
             $queue = $this->createDelayQueue($delay, $routingKey, $isRetryAttempt);
             // the delay queue always need to be declared because the name is dynamic and cannot be declared in advance
-            $this->logDuration($queue->declareQueue(...), 'declareQueue');
+            $options = compact('delay', 'routingKey', 'isRetryAttempt');
+            $options['queue_name'] = $queue->getName();
+
+            $this->logDuration($queue->declareQueue(...), 'declareQueue', $options);
             $this->logDuration(function () use ($queue, $delay, $routingKey, $isRetryAttempt) {
                 $queue->bind($this->connectionOptions['delay']['exchange_name'], $this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
-            }, 'bind');
+            }, 'bind', $options);
         }, 'setupDelay');
     }
 
@@ -462,7 +465,9 @@ class Connection implements LoggerAwareInterface
     {
         $queue = $this->queue($queueName);
 
-        return $this->logDuration(fn() => $queue->ack($message->getDeliveryTag()) ?? true, 'ack');
+        return $this->logDuration(fn() => $queue->ack($message->getDeliveryTag()) ?? true, 'ack', [
+            'queue_name' => $queueName,
+        ]);
     }
 
     public function nack(\AMQPEnvelope $message, string $queueName, int $flags = \AMQP_NOPARAM): bool
@@ -632,7 +637,7 @@ class Connection implements LoggerAwareInterface
         }
     }
 
-    private function logDuration(\Closure $fn, string $method): mixed
+    private function logDuration(\Closure $fn, string $method, array $options = []): mixed
     {
         $startedAt = microtime(true);
         try {
@@ -644,6 +649,7 @@ class Connection implements LoggerAwareInterface
                     'app.debug.amqp.publish' => [
                         'method' => $method,
                         'duration' => $duration,
+                        'options' => empty($options) ? null : json_encode($options, JSON_THROW_ON_ERROR),
                     ],
                 ]);
             }
