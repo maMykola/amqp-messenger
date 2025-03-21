@@ -364,25 +364,29 @@ class Connection implements LoggerAwareInterface
 
     private function setupDelay(int $delay, ?string $routingKey, bool $isRetryAttempt): void
     {
-        if ($this->autoSetupDelayExchange) {
-            $this->setupDelayExchange();
-        }
+        $this->logDuration(function () use ($delay, $routingKey, $isRetryAttempt) {
+            if ($this->autoSetupDelayExchange) {
+                $this->setupDelayExchange();
+            }
 
-        $queue = $this->createDelayQueue($delay, $routingKey, $isRetryAttempt);
-        $queue->declareQueue(); // the delay queue always need to be declared because the name is dynamic and cannot be declared in advance
-        $queue->bind($this->connectionOptions['delay']['exchange_name'], $this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
+            $queue = $this->createDelayQueue($delay, $routingKey, $isRetryAttempt);
+            $queue->declareQueue(); // the delay queue always need to be declared because the name is dynamic and cannot be declared in advance
+            $queue->bind($this->connectionOptions['delay']['exchange_name'], $this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
+        }, 'setupDelay');
     }
 
     private function getDelayExchange(): \AMQPExchange
     {
-        if (!isset($this->amqpDelayExchange)) {
-            $this->amqpDelayExchange = $this->amqpFactory->createExchange($this->channel());
-            $this->amqpDelayExchange->setName($this->connectionOptions['delay']['exchange_name']);
-            $this->amqpDelayExchange->setType(\AMQP_EX_TYPE_DIRECT);
-            $this->amqpDelayExchange->setFlags(\AMQP_DURABLE);
-        }
+        return $this->logDuration(function () {
+            if (!isset($this->amqpDelayExchange)) {
+                $this->amqpDelayExchange = $this->amqpFactory->createExchange($this->channel());
+                $this->amqpDelayExchange->setName($this->connectionOptions['delay']['exchange_name']);
+                $this->amqpDelayExchange->setType(\AMQP_EX_TYPE_DIRECT);
+                $this->amqpDelayExchange->setFlags(\AMQP_DURABLE);
+            }
 
-        return $this->amqpDelayExchange;
+            return $this->amqpDelayExchange;
+        }, 'getDelayExchange');
     }
 
     /**
@@ -396,23 +400,25 @@ class Connection implements LoggerAwareInterface
      */
     private function createDelayQueue(int $delay, ?string $routingKey, bool $isRetryAttempt): \AMQPQueue
     {
-        $queue = $this->amqpFactory->createQueue($this->channel());
-        $queue->setName($this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
-        $queue->setFlags(\AMQP_DURABLE);
-        $queue->setArguments(array_merge([
-            'x-message-ttl' => $delay,
-            // delete the delay queue 10 seconds after the message expires
-            // publishing another message redeclares the queue which renews the lease
-            'x-expires' => $delay + 10000,
-            // message should be broadcast to all consumers during delay, but to only one queue during retry
-            // empty name is default direct exchange
-            'x-dead-letter-exchange' => $isRetryAttempt ? '' : $this->exchangeOptions['name'],
-            // after being released from to DLX, make sure the original routing key will be used
-            // we must use an empty string instead of null for the argument to be picked up
-            'x-dead-letter-routing-key' => $routingKey ?? '',
-        ], $this->connectionOptions['delay']['arguments'] ?? []));
+        return $this->logDuration(function () use ($delay, $routingKey, $isRetryAttempt) {
+            $queue = $this->amqpFactory->createQueue($this->channel());
+            $queue->setName($this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
+            $queue->setFlags(\AMQP_DURABLE);
+            $queue->setArguments(array_merge([
+                'x-message-ttl' => $delay,
+                // delete the delay queue 10 seconds after the message expires
+                // publishing another message redeclares the queue which renews the lease
+                'x-expires' => $delay + 10000,
+                // message should be broadcast to all consumers during delay, but to only one queue during retry
+                // empty name is default direct exchange
+                'x-dead-letter-exchange' => $isRetryAttempt ? '' : $this->exchangeOptions['name'],
+                // after being released from to DLX, make sure the original routing key will be used
+                // we must use an empty string instead of null for the argument to be picked up
+                'x-dead-letter-routing-key' => $routingKey ?? '',
+            ], $this->connectionOptions['delay']['arguments'] ?? []));
 
-        return $queue;
+            return $queue;
+        }, 'createDelayQueue');
     }
 
     private function getRoutingKeyForDelay(int $delay, ?string $finalRoutingKey, bool $isRetryAttempt): string
@@ -439,7 +445,10 @@ class Connection implements LoggerAwareInterface
             $this->setupExchangeAndQueues();
         }
 
-        if (false !== $message = $this->queue($queueName)->get()) {
+        $queue = $this->queue($queueName);
+        $message = $this->logDuration(fn() => $queue->get(), 'get');
+
+        if (false !== $message) {
             return $message;
         }
 
@@ -448,12 +457,16 @@ class Connection implements LoggerAwareInterface
 
     public function ack(\AMQPEnvelope $message, string $queueName): bool
     {
-        return $this->queue($queueName)->ack($message->getDeliveryTag()) ?? true;
+        $queue = $this->queue($queueName);
+
+        return $this->logDuration(fn() => $queue->ack($message->getDeliveryTag()) ?? true, 'ack');
     }
 
     public function nack(\AMQPEnvelope $message, string $queueName, int $flags = \AMQP_NOPARAM): bool
     {
-        return $this->queue($queueName)->nack($message->getDeliveryTag(), $flags) ?? true;
+        $queue = $this->queue($queueName);
+
+        return $this->logDuration(fn() => $queue->nack($message->getDeliveryTag(), $flags) ?? true, 'nack');
     }
 
     public function setup(): void
@@ -464,21 +477,25 @@ class Connection implements LoggerAwareInterface
 
     private function setupExchangeAndQueues(): void
     {
-        $this->exchange()->declareExchange();
+        $this->logDuration(function () {
+            $this->exchange()->declareExchange();
 
-        foreach ($this->queuesOptions as $queueName => $queueConfig) {
-            $this->queue($queueName)->declareQueue();
-            foreach ($queueConfig['binding_keys'] ?? [null] as $bindingKey) {
-                $this->queue($queueName)->bind($this->exchangeOptions['name'], $bindingKey, $queueConfig['binding_arguments'] ?? []);
+            foreach ($this->queuesOptions as $queueName => $queueConfig) {
+                $this->queue($queueName)->declareQueue();
+                foreach ($queueConfig['binding_keys'] ?? [null] as $bindingKey) {
+                    $this->queue($queueName)->bind($this->exchangeOptions['name'], $bindingKey, $queueConfig['binding_arguments'] ?? []);
+                }
             }
-        }
-        $this->autoSetupExchange = false;
+            $this->autoSetupExchange = false;
+        }, 'setupExchangeAndQueues');
     }
 
     private function setupDelayExchange(): void
     {
-        $this->getDelayExchange()->declareExchange();
-        $this->autoSetupDelayExchange = false;
+        $this->logDuration(function () {
+            $this->getDelayExchange()->declareExchange();
+            $this->autoSetupDelayExchange = false;
+        }, 'setupDelayExchange');
     }
 
     /**
@@ -491,74 +508,82 @@ class Connection implements LoggerAwareInterface
 
     public function channel(): \AMQPChannel
     {
-        if (!isset($this->amqpChannel)) {
-            $connection = $this->amqpFactory->createConnection($this->connectionOptions);
-            $connectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pconnect' : 'connect';
+        return $this->logDuration(function () {
+            if (!isset($this->amqpChannel)) {
+                $connection = $this->amqpFactory->createConnection($this->connectionOptions);
+                $connectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pconnect' : 'connect';
 
-            try {
-                $connection->{$connectMethod}();
-            } catch (\AMQPConnectionException $e) {
-                throw new \AMQPException('Could not connect to the AMQP server. Please verify the provided DSN.', 0, $e);
+                try {
+                    $connection->{$connectMethod}();
+                } catch (\AMQPConnectionException $e) {
+                    throw new \AMQPException('Could not connect to the AMQP server. Please verify the provided DSN.', 0, $e);
+                }
+                $this->amqpChannel = $this->amqpFactory->createChannel($connection);
+
+                if ('' !== ($this->connectionOptions['confirm_timeout'] ?? '')) {
+                    $this->amqpChannel->confirmSelect();
+                    $this->amqpChannel->setConfirmCallback(
+                        static fn (): bool => false,
+                        static fn () => throw new TransportException('Message publication failed due to a negative acknowledgment (nack) from the broker.'),
+                    );
+                }
+
+                $this->lastActivityTime = time();
+            } elseif (0 < ($this->connectionOptions['heartbeat'] ?? 0) && time() > $this->lastActivityTime + 2 * $this->connectionOptions['heartbeat']) {
+                $disconnectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pdisconnect' : 'disconnect';
+                $this->amqpChannel->getConnection()->{$disconnectMethod}();
             }
-            $this->amqpChannel = $this->amqpFactory->createChannel($connection);
 
-            if ('' !== ($this->connectionOptions['confirm_timeout'] ?? '')) {
-                $this->amqpChannel->confirmSelect();
-                $this->amqpChannel->setConfirmCallback(
-                    static fn (): bool => false,
-                    static fn () => throw new TransportException('Message publication failed due to a negative acknowledgment (nack) from the broker.'),
-                );
-            }
-
-            $this->lastActivityTime = time();
-        } elseif (0 < ($this->connectionOptions['heartbeat'] ?? 0) && time() > $this->lastActivityTime + 2 * $this->connectionOptions['heartbeat']) {
-            $disconnectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pdisconnect' : 'disconnect';
-            $this->amqpChannel->getConnection()->{$disconnectMethod}();
-        }
-
-        return $this->amqpChannel;
+            return $this->amqpChannel;
+        }, 'channel');
     }
 
     public function queue(string $queueName): \AMQPQueue
     {
-        if (!isset($this->amqpQueues[$queueName])) {
-            $queueConfig = $this->queuesOptions[$queueName] ?? [];
+        return $this->logDuration(function () use ($queueName) {
+            if (!isset($this->amqpQueues[$queueName])) {
+                $queueConfig = $this->queuesOptions[$queueName] ?? [];
 
-            $amqpQueue = $this->amqpFactory->createQueue($this->channel());
-            $amqpQueue->setName($queueName);
-            $amqpQueue->setFlags($queueConfig['flags'] ?? \AMQP_DURABLE);
+                $amqpQueue = $this->amqpFactory->createQueue($this->channel());
+                $amqpQueue->setName($queueName);
+                $amqpQueue->setFlags($queueConfig['flags'] ?? \AMQP_DURABLE);
 
-            if (isset($queueConfig['arguments'])) {
-                $amqpQueue->setArguments($queueConfig['arguments']);
+                if (isset($queueConfig['arguments'])) {
+                    $amqpQueue->setArguments($queueConfig['arguments']);
+                }
+
+                $this->amqpQueues[$queueName] = $amqpQueue;
             }
 
-            $this->amqpQueues[$queueName] = $amqpQueue;
-        }
-
-        return $this->amqpQueues[$queueName];
+            return $this->amqpQueues[$queueName];
+        }, 'queue');
     }
 
     public function exchange(): \AMQPExchange
     {
-        if (!isset($this->amqpExchange)) {
-            $this->amqpExchange = $this->amqpFactory->createExchange($this->channel());
-            $this->amqpExchange->setName($this->exchangeOptions['name']);
-            $this->amqpExchange->setType($this->exchangeOptions['type'] ?? \AMQP_EX_TYPE_FANOUT);
-            $this->amqpExchange->setFlags($this->exchangeOptions['flags'] ?? \AMQP_DURABLE);
+        return $this->logDuration(function () {
+            if (!isset($this->amqpExchange)) {
+                $this->amqpExchange = $this->amqpFactory->createExchange($this->channel());
+                $this->amqpExchange->setName($this->exchangeOptions['name']);
+                $this->amqpExchange->setType($this->exchangeOptions['type'] ?? \AMQP_EX_TYPE_FANOUT);
+                $this->amqpExchange->setFlags($this->exchangeOptions['flags'] ?? \AMQP_DURABLE);
 
-            if (isset($this->exchangeOptions['arguments'])) {
-                $this->amqpExchange->setArguments($this->exchangeOptions['arguments']);
+                if (isset($this->exchangeOptions['arguments'])) {
+                    $this->amqpExchange->setArguments($this->exchangeOptions['arguments']);
+                }
             }
-        }
 
-        return $this->amqpExchange;
+            return $this->amqpExchange;
+        }, 'exchange');
     }
 
     private function clearWhenDisconnected(): void
     {
-        if (!$this->channel()->isConnected()) {
-            $this->clear();
-        }
+        $this->logDuration(function () {
+            if (!$this->channel()->isConnected()) {
+                $this->clear();
+            }
+        }, 'clearWhenDisconnected');
     }
 
     private function clear(): void
@@ -575,7 +600,8 @@ class Connection implements LoggerAwareInterface
     public function purgeQueues(): void
     {
         foreach ($this->getQueueNames() as $queueName) {
-            $this->queue($queueName)->purge();
+            $queue = $this->queue($queueName);
+            $this->logDuration(fn() => $queue->purge(), 'purge');
         }
     }
 
