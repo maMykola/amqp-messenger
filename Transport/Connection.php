@@ -635,12 +635,15 @@ class Connection implements LoggerAwareInterface
         try {
             return $fn();
         } finally {
-            $this->logger?->notice('AMQP Publish: setupExchangeAndQueues()', [
-                'app.debug.amqp.publish' => [
-                    'method' => $method,
-                    'duration' => microtime(true) - $startedAt,
-                ],
-            ]);
+            $duration = microtime(true) - $startedAt;
+            if ($duration >= 1.0) {
+                $this->logger?->notice('AMQP Publish: setupExchangeAndQueues()', [
+                    'app.debug.amqp.publish' => [
+                        'method' => $method,
+                        'duration' => $duration,
+                    ],
+                ]);
+            }
         }
     }
 }
