@@ -370,8 +370,11 @@ class Connection implements LoggerAwareInterface
             }
 
             $queue = $this->createDelayQueue($delay, $routingKey, $isRetryAttempt);
-            $queue->declareQueue(); // the delay queue always need to be declared because the name is dynamic and cannot be declared in advance
-            $queue->bind($this->connectionOptions['delay']['exchange_name'], $this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
+            // the delay queue always need to be declared because the name is dynamic and cannot be declared in advance
+            $this->logDuration($queue->declareQueue(...), 'declareQueue');
+            $this->logDuration(function () use ($queue, $delay, $routingKey, $isRetryAttempt) {
+                $queue->bind($this->connectionOptions['delay']['exchange_name'], $this->getRoutingKeyForDelay($delay, $routingKey, $isRetryAttempt));
+            }, 'bind');
         }, 'setupDelay');
     }
 
@@ -637,7 +640,7 @@ class Connection implements LoggerAwareInterface
         } finally {
             $duration = microtime(true) - $startedAt;
             if ($duration >= 1.0) {
-                $this->logger?->notice('AMQP Publish: setupExchangeAndQueues()', [
+                $this->logger?->notice("AMQP Publish: {$method}", [
                     'app.debug.amqp.publish' => [
                         'method' => $method,
                         'duration' => $duration,
